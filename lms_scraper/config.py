@@ -23,7 +23,7 @@ class Settings:
     poll_interval: int = field(default_factory=lambda: int(_env("POLL_INTERVAL_SECONDS", "900")))
     poll_jitter: int = field(default_factory=lambda: int(_env("POLL_JITTER_SECONDS", "120")))
     browser_channel: str = field(default_factory=lambda: _env("BROWSER_CHANNEL", ""))
-    timeout_ms: int =field(default_factory=lambda: int(_env("NAV_TIMEOUT_MS", "45000")))
+    timeout_ms: int = field(default_factory=lambda: int(_env("NAV_TIMEOUT_MS", "45000")))
     db_path: Path = field(default_factory=lambda: Path(_env("DB_PATH", str(ROOT / "data" / "grades.db"))))
 
     # Navigation (regexes, case-insensitive). Tweak these after running `recon`.
