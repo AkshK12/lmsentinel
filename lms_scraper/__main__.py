@@ -216,7 +216,9 @@ def main() -> None:
         asyncio.run(recon(settings, store))
     else:
         try:
-            asyncio.run(watch(settings, store, require_account(), make_notifier(), once=args.cmd == "once"))
+            ok = asyncio.run(watch(settings, store, require_account(), make_notifier(), once=args.cmd == "once"))
+            if not ok:
+                sys.exit(1)  # makes the GitHub Actions run show a red ❌ instead of a false ✅
         except LoginError as e:
             sys.exit(f"Login failed: {e}\nIf you changed your password, run:  python -m lms_scraper setup")
 

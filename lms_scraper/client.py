@@ -165,15 +165,31 @@ class LMSClient:
             await self._click(await self._find(self.s.nav_assignments))
         await self._snap("04_assignments_term_page")
 
-    async def select_term(self, same_as: str | None = None) -> str:
-        """Pick the term per TERM_STRATEGY, or exactly `same_as` (used when coming back via Change Class)."""
+    async def _term_options(self):
         for frame in self.page.frames:
             try:
                 options = await frame.evaluate(TERMS_JS)
             except Exception:
                 continue
-            if not options:
-                continue
+            if options:
+                return frame, options
+        return None, []
+
+    async def select_term(self, same_as: str | None = None) -> str:
+        """Pick the term per TERM_STRATEGY, or exactly `same_as` (used when coming back via Change Class).
+        Pages can load slowly (e.g. on GitHub's servers), so keep looking until the term list
+        or the subject list shows up."""
+        start = time.monotonic()
+        deadline = start + self.s.timeout_ms / 1000
+        while True:
+            frame, options = await self._term_options()
+            if options or time.monotonic() > deadline:
+                break
+            # no term step on this page? (grace period so a still-visible previous page doesn't fool us)
+            if time.monotonic() - start > 5 and await self._subject_links():
+                break
+            await asyncio.sleep(1)
+        if options:
             chosen = next((o for o in options if o["label"] == same_as), None) if same_as else None
             chosen = chosen or self._choose_term(options)
             log.info("Selecting term: %s", chosen["label"])
@@ -200,7 +216,38 @@ class LMSClient:
                 return o
         raise NavigationError(f"No term matches TERM_STRATEGY={strat!r}: {[o['label'] for o in options]}")
 
-    async def list_subjects(self) -> list[dict]:
+    async def list_subjects(self, wait_ms: int = 20000) -> list[dict]:
+        deadline = time.monotonic() + wait_ms / 1000
+        while True:
+            subjects = await self._subject_links()
+            if subjects or time.monotonic() > deadline:
+                break
+            await asyncio.sleep(1)
+        if subjects:
+            log.info("Found %d subject(s): %s", len(subjects), [l["text"] for l in subjects])
+        return subjects
+
+    async def describe_page(self) -> str:
+        """Page structure for debugging: URLs, counts and button/link labels, never marks."""
+        lines = [f"url={self.page.url} title={await self.page.title()!r}"]
+        for i, frame in enumerate(self.page.frames):
+            try:
+                info = await frame.evaluate(r"""() => ({
+                    radios: document.querySelectorAll('input[type=radio]').length,
+                    selects: document.querySelectorAll('select').length,
+                    tables: document.querySelectorAll('table').length,
+                    tableLinks: document.querySelectorAll('table a[id]').length,
+                    labels: [...document.querySelectorAll('a, button, input[type=button], input[type=submit]')]
+                      .filter(e => e.offsetWidth || e.offsetHeight)
+                      .map(e => (e.innerText || e.value || '').replace(/\s+/g, ' ').trim().slice(0, 40))
+                      .filter(Boolean).slice(0, 25),
+                })""")
+            except Exception as e:
+                info = f"<unreadable: {e.__class__.__name__}>"
+            lines.append(f"frame {i} name={frame.name!r} url={frame.url[:150]} {info}")
+        return "\n".join(lines)
+
+    async def _subject_links(self) -> list[dict]:
         """Subject links = the largest family of PeopleSoft grid links (ids like CLASS_NAME$0, $1 ...)."""
         links: list[dict] = []
         for frame in self.page.frames:
@@ -217,9 +264,7 @@ class LMSClient:
             groups[l["id"].split("$")[0]].append(l)
         if not groups:
             return []
-        best = max(groups.values(), key=len)
-        log.info("Found %d subject(s): %s", len(best), [l["text"] for l in best])
-        return best
+        return max(groups.values(), key=len)
 
     async def extract_grids(self) -> list[dict]:
         grids: list[dict] = []
@@ -247,6 +292,16 @@ class LMSClient:
         await self.select_term(same_as=self.term)
 
     async def scrape(self, userid: str, password: str) -> ScrapeResult:
+        try:
+            return await self._scrape(userid, password)
+        except NavigationError:
+            try:
+                log.error("Page structure when navigation failed:\n%s", await self.describe_page())
+            except Exception:
+                pass
+            raise
+
+    async def _scrape(self, userid: str, password: str) -> ScrapeResult:
         await self.login(userid, password)
         await self.open_assignments()
         term = self.term = await self.select_term()

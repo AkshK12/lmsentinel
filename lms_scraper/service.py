@@ -72,29 +72,36 @@ async def check_account(browser: Browser, settings: Settings, store: Store, acco
 
 
 async def run_cycle(browser: Browser, settings: Settings, store: Store, account: Account,
-                    notifier: Notifier) -> None:
+                    notifier: Notifier) -> bool:
+    """True if the check succeeded (after at most 2 attempts)."""
     for attempt in (1, 2):
         try:
             await check_account(browser, settings, store, account, notifier)
-            return
+            return True
         except LoginError:
             raise  # never retry a bad password: avoids locking the account
         except Exception as e:
             log.warning("Attempt %d failed: %r", attempt, e)
-            await asyncio.sleep(10)
+            if attempt == 1:
+                await asyncio.sleep(10)
+    log.error("Check failed; nothing was saved this time")
+    return False
 
 
 async def watch(settings: Settings, store: Store, account: Account, notifier: Notifier,
-                once: bool = False) -> None:
+                once: bool = False) -> bool:
+    """Loop forever, or with once=True run a single check and return whether it succeeded."""
     async with async_playwright() as pw:
         browser = await launch_browser(pw, settings)
-        while True:
-            if not browser.is_connected():
-                browser = await launch_browser(pw, settings)
-            await run_cycle(browser, settings, store, account, notifier)
-            if once:
-                break
-            delay = settings.poll_interval + random.uniform(0, settings.poll_jitter)
-            log.info("Next check in %.0f s", delay)
-            await asyncio.sleep(delay)
-        await browser.close()
+        try:
+            while True:
+                if not browser.is_connected():
+                    browser = await launch_browser(pw, settings)
+                ok = await run_cycle(browser, settings, store, account, notifier)
+                if once:
+                    return ok
+                delay = settings.poll_interval + random.uniform(0, settings.poll_jitter)
+                log.info("Next check in %.0f s", delay)
+                await asyncio.sleep(delay)
+        finally:
+            await browser.close()

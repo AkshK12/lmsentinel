@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import json
 import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -61,11 +62,14 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/grades":
             return self._send(page('<a href="/terms">View My Assignments</a>'))
         if u.path == "/terms":
+            # rendered 3 s late by JS, like the slow-loading PeopleSoft page seen on GitHub's servers
+            form = ('<form action="/classes"><table><tr><th>Select</th><th>Term</th><th>Career</th></tr>'
+                    '<tr><td><input type="radio" id="TERM$0" name="t" value="2425EVEN"></td><td>2425 EVEN SEM</td><td>UG</td></tr>'
+                    '<tr><td><input type="radio" id="TERM$1" name="t" value="2526ODD"></td><td>2526 ODD SEM</td><td>UG</td></tr>'
+                    '</table><input type="submit" value="Continue"></form>')
             return self._send(page(
-                '<form action="/classes"><table><tr><th>Select</th><th>Term</th><th>Career</th></tr>'
-                '<tr><td><input type="radio" id="TERM$0" name="t" value="2425EVEN"></td><td>2425 EVEN SEM</td><td>UG</td></tr>'
-                '<tr><td><input type="radio" id="TERM$1" name="t" value="2526ODD"></td><td>2526 ODD SEM</td><td>UG</td></tr>'
-                '</table><input type="submit" value="Continue"></form>'))
+                '<div id="c">Processing...</div><script>setTimeout(function () {'
+                f"document.getElementById('c').innerHTML = {json.dumps(form)}; }}, 3000);</script>"))
         if u.path == "/classes":
             VISITS.append(q.get("t", [""])[0])
             rows = "".join(f'<tr><td><a id="CLASS_LINK${i}" href="/class?i={i}">{s}</a></td><td>LEC</td></tr>'
