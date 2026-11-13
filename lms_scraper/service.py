@@ -9,9 +9,10 @@ import random
 from playwright.async_api import Browser, async_playwright
 
 from .client import LMSClient, LoginError, ScrapeResult
+from .commands import CommandHandler
 from .config import Settings
 from .diff import Change, diff_grids, hash_grids
-from .notifier import Notifier
+from .notifier import Notifier, TelegramNotifier
 from .store import Account, Store
 
 log = logging.getLogger(__name__)
@@ -90,18 +91,33 @@ async def run_cycle(browser: Browser, settings: Settings, store: Store, account:
 
 async def watch(settings: Settings, store: Store, account: Account, notifier: Notifier,
                 once: bool = False) -> bool:
-    """Loop forever, or with once=True run a single check and return whether it succeeded."""
+    """Loop forever, or with once=True run a single check and return whether it succeeded.
+    With Telegram configured, /showmarks etc. are answered: after the check in `once` mode
+    (cloud), or within seconds by a background listener in `watch` mode (laptop)."""
+    commands = None
+    if isinstance(notifier, TelegramNotifier):
+        commands = CommandHandler(notifier.token, notifier.chat_id, store, account.user_id)
+    listener = None
     async with async_playwright() as pw:
         browser = await launch_browser(pw, settings)
         try:
+            if commands and not once:
+                listener = asyncio.create_task(commands.listen())
             while True:
                 if not browser.is_connected():
                     browser = await launch_browser(pw, settings)
                 ok = await run_cycle(browser, settings, store, account, notifier)
                 if once:
+                    if commands:
+                        try:
+                            await commands.poll_once()
+                        except Exception as e:  # never fail the check because of a chat command
+                            log.warning("Could not process Telegram commands: %s", e)
                     return ok
                 delay = settings.poll_interval + random.uniform(0, settings.poll_jitter)
                 log.info("Next check in %.0f s", delay)
                 await asyncio.sleep(delay)
         finally:
+            if listener:
+                listener.cancel()
             await browser.close()

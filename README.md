@@ -69,6 +69,21 @@ python -m lms_scraper forget     # delete your saved password from this laptop
 python -m lms_scraper recon --headed   # debug: record every page + request to recon/
 ```
 
+## Telegram commands
+Send these to your bot (type `/` in the chat to see the menu):
+
+| Command | Reply |
+|---|---|
+| `/showmarks` | All your saved marks for the latest term |
+| `/showmarks machine` | Only subjects whose name contains "machine" |
+| `/help` | The list of commands |
+
+- **Cloud mode:** commands are answered at the end of the next scheduled run (right after a fresh
+  check), so the reply can take up to ~15 minutes (plus any GitHub delay).
+- **Laptop mode (`watch`):** replies arrive within seconds.
+- The bot answers **only your chat** (`TELEGRAM_CHAT_ID`); messages from anyone else are ignored.
+- Use either laptop `watch` **or** the cloud workflow for one bot, not both at once.
+
 ## Testing alerts without waiting for new marks
 ```
 python -m lms_scraper test-alert        # sends a sample message to your bot

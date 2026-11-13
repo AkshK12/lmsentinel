@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, urlsplit
 from playwright.async_api import async_playwright
 
 from lms_scraper.client import LMSClient, LoginError
+from lms_scraper.commands import CommandHandler
 from lms_scraper.config import Settings
 from lms_scraper.notifier import format_changes
 from lms_scraper.service import apply_result, deliver_pending
@@ -161,6 +162,36 @@ async def main() -> None:
         assert changes[0].fields[0][1] == "(simulated old value)"
         assert apply_result(store, "student", await scrape()) == []
         print("OK  simulate-change:", changes[0].to_text())
+
+        # 7. Telegram commands: answered from saved marks, ONLY for the owner's chat
+        class FakeTelegram:
+            def __init__(self, updates):
+                self.pending, self.sent, self.calls = list(updates), [], []
+
+            def __call__(self, token, method, params=None, timeout=30):
+                self.calls.append((method, params))
+                if method == "getUpdates":
+                    out, self.pending = self.pending, []
+                    return out
+                if method == "sendMessage":
+                    self.sent.append(params)
+                return True
+
+        def msg(uid, chat, text):
+            return {"update_id": uid, "message": {"chat": {"id": chat}, "text": text}}
+
+        api = FakeTelegram([msg(1, 111, "/showmarks"), msg(2, 999, "/showmarks"),
+                            msg(3, 111, "/showmarks@MyBot numerical"), msg(4, 111, "/help"), msg(5, 111, "hello")])
+        handler = CommandHandler("TOKEN", "111", store, "student", api=api)
+        assert await handler.poll_once() == 3
+        assert all(m["chat_id"] == "111" for m in api.sent), "replied to a stranger!"
+        full, filtered, help_msg = (m["text"] for m in api.sent)
+        assert "UCS301 - Data Structures" in full and "Mid Sem" in full and "Score: 24" in full
+        assert "UMA021" in filtered and "UCS301" not in filtered
+        assert "/showmarks" in help_msg
+        assert ("getUpdates", {"offset": 6, "timeout": 0, "limit": 1}) in api.calls  # acknowledged
+        assert await handler.poll_once() == 0                                       # nothing twice
+        print("OK  /showmarks answered from saved marks, stranger ignored:\n" + full)
         await browser.close()
     srv.shutdown()
     print("\nALL TESTS PASSED")

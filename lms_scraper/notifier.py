@@ -54,6 +54,11 @@ def format_changes(term: str, changes: list[Change]) -> list[str]:
     for subject, items in by_subject.items():
         lines += ["", f"<b>{html.escape(subject)}</b>"]
         lines += [f"• {html.escape(c.describe(), quote=False).replace('-&gt;', '→')}" for c in items]
+    return chunk_lines(lines)
+
+
+def chunk_lines(lines: list[str]) -> list[str]:
+    """Pack lines into messages of at most MAX_LEN characters, breaking only between lines."""
     chunks, cur = [], ""
     for ln in lines:
         if len(cur) + len(ln) + 1 > MAX_LEN and cur:
