@@ -1,0 +1,102 @@
+# Checks your marks every 15 minutes on GitHub's servers, so your laptop can be off.
+# Setup: Settings -> Secrets and variables -> Actions -> add
+#   LMS_USERID, LMS_PASSWORD, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+# Your secrets are only visible to YOUR repo. Saved marks are encrypted before caching,
+# and the logs never print marks.
+name: Check marks
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"   # GitHub may delay scheduled runs by a few minutes under load
+  workflow_dispatch:          # "Run workflow" button for testing
+    inputs:
+      simulate_change:
+        description: "Test alert: fake one old value so this run sends a real Telegram message"
+        type: boolean
+        default: false
+
+concurrency:
+  group: check-marks
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      LMS_USERID: ${{ secrets.LMS_USERID }}
+      LMS_PASSWORD: ${{ secrets.LMS_PASSWORD }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      BROWSER_CHANNEL: chrome   # Google Chrome is preinstalled on GitHub runners: no browser download
+      HEADLESS: "true"
+    steps:
+      - name: Check secrets are set
+        id: cfg
+        run: |
+          if [ -z "$LMS_USERID" ] || [ -z "$LMS_PASSWORD" ]; then
+            echo "::notice::Secrets LMS_USERID / LMS_PASSWORD are not set in this repo; skipping."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.cfg.outputs.ok == 'true'
+
+      - uses: actions/setup-python@v5
+        if: steps.cfg.outputs.ok == 'true'
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        if: steps.cfg.outputs.ok == 'true'
+        run: pip install -q -r requirements.txt
+
+      - name: Restore saved marks (encrypted)
+        if: steps.cfg.outputs.ok == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: state
+          key: marks-${{ github.run_id }}
+          restore-keys: marks-
+
+      - name: Decrypt
+        id: before
+        if: steps.cfg.outputs.ok == 'true'
+        run: |
+          mkdir -p data
+          if [ -f state/grades.db.enc ]; then
+            openssl enc -d -aes-256-cbc -pbkdf2 -in state/grades.db.enc -out data/grades.db -pass env:LMS_PASSWORD \
+              || { echo "::warning::Could not decrypt saved marks (password changed?). Starting a fresh baseline."; rm -f data/grades.db; }
+          fi
+          echo "hash=$(sha256sum data/grades.db 2>/dev/null | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Simulate a change (manual test)
+        if: steps.cfg.outputs.ok == 'true' && inputs.simulate_change
+        run: python -m lms_scraper simulate-change
+
+      - name: Check marks
+        if: steps.cfg.outputs.ok == 'true'
+        run: python -m lms_scraper once
+
+      - name: Encrypt
+        id: after
+        if: always() && steps.cfg.outputs.ok == 'true'
+        run: |
+          mkdir -p state
+          if [ -f data/grades.db ]; then
+            openssl enc -aes-256-cbc -pbkdf2 -salt -in data/grades.db -out state/grades.db.enc -pass env:LMS_PASSWORD
+          fi
+          echo "hash=$(sha256sum data/grades.db 2>/dev/null | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Save marks (only when something changed)
+        if: always() && steps.cfg.outputs.ok == 'true' && steps.after.outputs.hash != '' && steps.after.outputs.hash != steps.before.outputs.hash
+        uses: actions/cache/save@v4
+        with:
+          path: state
+          key: marks-${{ github.run_id }}-${{ github.run_attempt }}
