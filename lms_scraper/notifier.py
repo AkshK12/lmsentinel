@@ -95,8 +95,9 @@ class ConsoleNotifier:
 
 
 def make_notifier() -> Notifier:
-    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-    chat = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+    # tolerate values pasted with quotes/spaces (a common mistake when adding GitHub secrets)
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip().strip("'\"").strip()
+    chat = os.getenv("TELEGRAM_CHAT_ID", "").strip().strip("'\"").strip()
     if token and chat:
         return TelegramNotifier(token, chat)
     log.info("Telegram not configured (run: python -m lms_scraper telegram); printing changes to console")
